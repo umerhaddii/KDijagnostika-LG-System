@@ -1,12 +1,4 @@
-langchain
+streamlit
+openai
 langgraph
 langchain-openai
-dotenv
-pydantic
-streamlit
-langchain-community
-langchain-tavily
-beautifulsoup4
-pinecone-client
-pinecone
-langchain-pinecone
