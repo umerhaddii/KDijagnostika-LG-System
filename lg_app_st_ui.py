@@ -1,22 +1,34 @@
 import streamlit as st
-from lg_backend import initialize_models, sonar_search, gpt_processing, GPT_PROMPT
+import uuid
+from langgraph_backend import initialize_models, stream_diagnostic_workflow, GPT_PROMPT
 
 st.title("KDijagnostika Automotive Diagnostic Support")
 
 # Initialize session state
 if "messages" not in st.session_state:
     st.session_state.messages = []
+if "thread_id" not in st.session_state:
+    st.session_state.thread_id = str(uuid.uuid4())
 
 # Sidebar with New Chat button
 with st.sidebar:
     if st.button("New Chat", type="primary", use_container_width=True):
         st.session_state.messages = []
+        st.session_state.thread_id = str(uuid.uuid4())
         st.rerun()
 
 # Display chat history
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
-        st.markdown(message["content"])
+        if message["role"] == "assistant":
+            if "sonar_response" in message:
+                st.subheader("🌐 Web Search Results:")
+                st.write(message["sonar_response"])
+            if "final_answer" in message:
+                st.subheader("🔧 Professional Diagnosis:")
+                st.markdown(message["final_answer"])
+        else:
+            st.markdown(message["content"])
 
 # Chat input
 user_question = st.chat_input("Enter your automotive diagnostic question:")
@@ -29,35 +41,44 @@ if user_question:
     
     # Assistant response
     with st.chat_message("assistant"):
-        # Web search status
-        with st.status("🔍 Searching web for diagnostic information...") as status:
-            gpt_model, perplexity_client = initialize_models()
-            sonar_response = sonar_search(user_question, perplexity_client)
-            status.update(label="✅ Web search completed", state="complete")
+        sonar_response = ""
+        final_answer = ""
         
-        # Display sonar response
-        st.subheader("🌐 Web Search Results:")
-        st.write(sonar_response)
+        # Initialize status container
+        status_container = st.status("🔍 Searching web for diagnostic information...")
         
-        # GPT processing status
-        with st.status("🤖 Formatting diagnostic response...") as status:
-            formatted_prompt = GPT_PROMPT.format(user_question=user_question, sonar_response=sonar_response)
-            status.update(label="✅ Response ready", state="complete")
-        
-        # Stream GPT response
-        st.subheader("🔧 Professional Diagnosis:")
-        response_placeholder = st.empty()
-        full_response = ""
-        
-        for chunk in gpt_model.stream(formatted_prompt):
-            full_response += chunk.content
-            response_placeholder.markdown(full_response)
+        # Stream through LangGraph workflow
+        for node_name, node_output in stream_diagnostic_workflow(user_question, st.session_state.thread_id):
+            if node_name == "sonar_search":
+                sonar_response = node_output["sonar_response"]
+                status_container.update(label="✅ Web search completed", state="complete")
+                
+                st.subheader("🌐 Web Search Results:")
+                st.write(sonar_response)
+                
+                # Update status for next phase
+                status_container = st.status("🤖 Formatting diagnostic response...")
+            
+            elif node_name == "gpt_processing":
+                status_container.update(label="✅ Response ready", state="complete")
+                
+                st.subheader("🔧 Professional Diagnosis:")
+                
+                # Real streaming using GPT model directly
+                gpt_model, _ = initialize_models()
+                formatted_prompt = GPT_PROMPT.format(
+                    user_question=user_question, 
+                    sonar_response=sonar_response
+                )
+                
+                # Stream the response using st.write_stream
+                final_answer = st.write_stream(
+                    chunk.content for chunk in gpt_model.stream(formatted_prompt)
+                )
     
     # Add assistant response to chat history
-    complete_response = f"""🌐 **Web Search Results:**
-    {sonar_response}
-
-    🔧 **Professional Diagnosis:**
-    {full_response}"""
-    
-    st.session_state.messages.append({"role": "assistant", "content": complete_response})
+    st.session_state.messages.append({
+        "role": "assistant", 
+        "sonar_response": sonar_response,
+        "final_answer": final_answer
+    })
