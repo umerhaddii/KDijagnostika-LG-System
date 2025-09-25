@@ -1,0 +1,1 @@
+# KDijagnostika-LG-System
